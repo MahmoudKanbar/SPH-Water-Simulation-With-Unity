@@ -1,0 +1,342 @@
+#pragma kernel ResetVoxelsPointers
+#pragma kernel PopulateFlattenedVoxels
+#pragma kernel ComputeDensity
+#pragma kernel ComputeAcceleration
+#pragma kernel ApplyExternalForces
+#pragma kernel ApplyMotion
+#pragma kernel ApplyResulotion;
+
+
+struct ForceField
+{
+    float3 center; 
+    float3 size;
+    float3 force;
+    int use;
+};
+
+struct ExplosionField
+{
+    float3 center; 
+    float radius;
+    float force;
+    int use;
+};
+
+struct PlaneContainer
+{
+    float3 position;
+    float3 normal;
+    float3 size;
+    float3 x;
+    float3 y;
+};
+
+
+
+RWStructuredBuffer<float3> Particles;
+RWStructuredBuffer<float3> Velocities;
+RWStructuredBuffer<float3> Accelerations;
+
+RWStructuredBuffer<float> Densities;
+
+RWStructuredBuffer<int> VoxelsPointers; 
+RWStructuredBuffer<int> FlattenedVoxels;
+
+RWStructuredBuffer<ForceField> ForceFields;
+RWStructuredBuffer<ExplosionField> ExplosionFields;
+RWStructuredBuffer<PlaneContainer> Planes;
+
+RWStructuredBuffer<float3> Penetrations;
+RWStructuredBuffer<float3> VelocityReflections;
+RWStructuredBuffer<int> CollisionCount;
+
+
+float3 Gravity;
+
+float GridVolume;
+float VoxelVolume;
+float CornerVolume;
+
+int VoxelCapacity;
+int ParticlesCount;
+int VoxelsCount;
+int FlattenedVoxelsCapacity;
+int ForceFieldsCount;
+int ExplosionFieldsCount;
+int PlanesCount;
+
+float H;
+float Radius;
+float Mass;
+float PI;
+float K;
+float Mu;
+float Rho;
+float Dampen;
+float TimeStep;
+
+float H2;
+float H4;
+float H16;
+float C;
+float C0;
+float CP;
+float CV;
+
+
+bool GetIntersectionWithPlane(float3 particlePosition, int planeIndex, out float intersection)
+{
+    particlePosition -= Planes[planeIndex].position;
+
+    float d = dot(particlePosition, Planes[planeIndex].normal) - Radius;
+
+    float2 projection;
+    projection.x = dot(particlePosition, Planes[planeIndex].x);
+    projection.y = dot(particlePosition, Planes[planeIndex].y);
+
+    float2 start = - Planes[planeIndex].size.xy / 2 - float2(Radius, Radius);
+    float2 end = Planes[planeIndex].size.xy / 2 + float2(Radius, Radius);
+
+    if (d <= 0 && d >= -Planes[planeIndex].size.z && projection.x >= start.x && projection.y >= start.y && projection.x <= end.x && projection.y <= end.y)
+    {
+        intersection = d;
+        return true;
+    }
+    
+    intersection = 0;
+    return false;
+}
+
+int3 GetVoxelPosition(float3 particlePosition) 
+{
+    return int3(particlePosition.x / VoxelVolume, particlePosition.y / VoxelVolume, particlePosition.z / VoxelVolume);
+}
+
+int3 VoxelHashToVoxelPosition(int id) 
+{
+    int x = id % GridVolume;
+	id /= GridVolume;
+	int y = id % GridVolume;
+	id /= GridVolume;
+	int z = id % GridVolume;
+    return int3(x, y, z);
+}
+
+int GetVoxelHash(int3 voxelPosition) 
+{
+    return voxelPosition.z * GridVolume * GridVolume + voxelPosition.y * GridVolume + voxelPosition.x;
+}
+
+int3 GetCornerPosition(float3 positionInsidVoxel) 
+{
+    return int3(positionInsidVoxel.x / CornerVolume, positionInsidVoxel.y / CornerVolume, positionInsidVoxel.z / CornerVolume);
+}
+
+int GetCornerHash(int3 cornerPosition) 
+{
+    return cornerPosition.z * 2 * 2 + cornerPosition.y * 2 + cornerPosition.x;
+}
+
+int GetVoxelStartingIndex(int hash) 
+{
+   return hash * VoxelCapacity;
+}
+
+void GetNeighborVoxeles(int3 voxelPositions, out int neighbours[27])
+{
+    int result[27];
+    int l = 0;
+    for (int i = -1; i <= 1; i++)
+    {
+        for (int j = -1; j <= 1; j++)
+        {
+            for (int k = -1; k <= 1; k++)
+            {
+                int3 position = voxelPositions + int3(i, j, k);
+                result[l++] = GetVoxelHash(position);
+            }
+        }
+    }
+    neighbours = result;
+}
+
+
+
+[numthreads(64, 1, 1)]
+void ResetVoxelsPointers(int3 id: SV_DispatchThreadID) 
+{
+    if (id.x >= VoxelsCount) return;
+    VoxelsPointers[id.x] = 0;
+}
+
+[numthreads(64, 1, 1)]
+void PopulateFlattenedVoxels(int3 id: SV_DispatchThreadID) 
+{
+    if (id.x >= ParticlesCount) return;
+
+    int voxelHash = GetVoxelHash(GetVoxelPosition(Particles[id.x]));
+    
+    int currentPointer = 0;
+    InterlockedAdd(VoxelsPointers[voxelHash], 1, currentPointer);
+
+    int voxelStartingIndex = GetVoxelStartingIndex(voxelHash);
+    FlattenedVoxels[voxelStartingIndex + currentPointer] = id.x;
+}
+
+[numthreads(64, 1, 1)]
+void ComputeDensity(int3 id: SV_DispatchThreadID) 
+{
+    if (id.x >= ParticlesCount) return;
+    
+    int mainParticleId = id.x;
+    float3 mainParticle = Particles[id.x];
+
+    Densities[mainParticleId] = 4 * Mass / PI / H2;
+
+    int neighbours[27];
+    GetNeighborVoxeles(GetVoxelPosition(mainParticle), neighbours);
+    for(int i = 0; i < 27; i++)
+    {
+        int neighborVoxelHash = neighbours[i];
+        if(neighborVoxelHash == -1) continue;
+        int voxelStartingIndex = GetVoxelStartingIndex(neighborVoxelHash);
+        int numParticlesInVoxel = VoxelsPointers[neighborVoxelHash];
+        for(int j = voxelStartingIndex; j < voxelStartingIndex + numParticlesInVoxel; j++)
+        {
+            int otherParticleId = FlattenedVoxels[j];
+            if(otherParticleId == mainParticleId) continue;
+            float3 otherParticle = Particles[otherParticleId];
+            float3 relativePos = (mainParticle - otherParticle);
+            float rSquare = dot(relativePos, relativePos);
+            float z = H2 - rSquare;
+            if(z > 0)
+            {
+                float rho = C * z * z * z;
+                Densities[mainParticleId] += rho;
+            }
+        }
+    }
+   
+}
+
+[numthreads(64, 1, 1)]
+void ComputeAcceleration(int3 id: SV_DispatchThreadID) 
+{
+    if (id.x >= ParticlesCount) return;
+    int mainParticleId = id.x;
+
+    float3 mainParticle = Particles[mainParticleId];
+
+    float rho_i = Densities[mainParticleId];
+    Accelerations[mainParticleId] = float3(0.0f, 0.0f, 0.0f);
+    
+    int neighbours[27];
+    GetNeighborVoxeles(GetVoxelPosition(mainParticle), neighbours);
+    for(int i = 0; i < 27; i++) 
+    {
+        int neighborVoxelHash =  neighbours[i];
+        if(neighborVoxelHash == -1) continue;
+        int voxelStartingIndex = GetVoxelStartingIndex(neighborVoxelHash);
+        int numParticlesInVoxel = VoxelsPointers[neighborVoxelHash];
+        for(int j = voxelStartingIndex; j < voxelStartingIndex + numParticlesInVoxel; j++) 
+        {
+            int otherParticleId = FlattenedVoxels[j];
+            if(otherParticleId == mainParticleId) continue;
+            float3 otherParticle = Particles[otherParticleId];
+            float3 dPosition = mainParticle - otherParticle;
+            float rSquare = dot(dPosition, dPosition);
+            if (rSquare < H2)
+            {
+                float rho_j = Densities[otherParticleId];
+                float q = sqrt(rSquare) / H;
+                float u = 1 - q;
+                float wZero = C0 * u / rho_i / rho_j;
+                float wP = wZero * CP * (rho_i + rho_j - 2 * Rho) * u / q;
+                float wV = wZero * CV;
+                float3 dV = Velocities[mainParticleId] - Velocities[otherParticleId];
+                Accelerations[mainParticleId] += wP * dPosition + wV * dV;
+            }
+        }
+    }
+}
+
+[numthreads(64, 1, 1)]
+void ApplyExternalForces(int3 id: SV_DispatchThreadID)
+{
+    if (id.x >= ParticlesCount) return;
+    int mainParticleId = id.x;
+
+    float3 mainParticle = Particles[mainParticleId];
+
+    // F = M * A =>
+    // A = F / M
+
+    float3 externalForce = Gravity * Mass;
+
+
+    for (int i = 0; i < ForceFieldsCount; i++)
+    {
+        if (ForceFields[i].use == 0) continue;
+        float3 start = ForceFields[i].center - ForceFields[i].size / 2;
+        float3 end = ForceFields[i].center + ForceFields[i].size / 2;
+        if (mainParticle.x >= start.x && mainParticle.y >= start.y && mainParticle.z >= start.z &&
+            mainParticle.x <= end.x && mainParticle.y <= end.y && mainParticle.z <= end.z)
+        {
+            externalForce += ForceFields[i].force;
+        }
+    }
+
+    for (i = 0; i < ExplosionFieldsCount; i++)
+    {
+        if (ExplosionFields[i].use == 0) continue;
+        float3 difference = mainParticle - ExplosionFields[i].center;
+        float distance2 = dot(difference, difference);
+        if (distance2 <= ExplosionFields[i].radius * ExplosionFields[i].radius)
+        {
+            externalForce += ExplosionFields[i].force * normalize(difference);
+        }
+    }
+
+
+    Accelerations[mainParticleId] += externalForce / Mass;
+}
+
+[numthreads(64, 1, 1)]
+void ApplyMotion(int3 id: SV_DispatchThreadID) 
+{
+    if (id.x >= ParticlesCount) return; 
+    int mainParticleId = id.x;
+    Velocities[mainParticleId] += Accelerations[mainParticleId] * TimeStep;
+    Particles[mainParticleId] += Velocities[mainParticleId] * TimeStep;
+
+    for (int i = 0; i < PlanesCount; i++)
+    {
+        float intersection;
+        if(GetIntersectionWithPlane(Particles[mainParticleId], i, intersection))
+        {
+            float temp = 1;
+            if (i < 6) temp = Dampen; // boarders planes
+            VelocityReflections[mainParticleId] += reflect(Velocities[mainParticleId], Planes[i].normal) * temp;
+            Penetrations[mainParticleId] += Planes[i].normal * (1 + temp) * intersection;
+            CollisionCount[mainParticleId] += 1;
+        }
+    }
+}
+
+[numthreads(64, 1, 1)]
+void ApplyResulotion(int3 id: SV_DispatchThreadID)
+{
+    if (id.x >= ParticlesCount) return; 
+    int mainParticleId = id.x;
+
+    if (CollisionCount[mainParticleId] > 0)
+    {
+        Velocities[mainParticleId] = VelocityReflections[mainParticleId] / CollisionCount[mainParticleId];
+        Particles[mainParticleId] -= Penetrations[mainParticleId] / CollisionCount[mainParticleId];
+    }
+
+    VelocityReflections[mainParticleId] = float3(0.0f, 0.0f, 0.0f);
+    Penetrations[mainParticleId] = float3(0.0f, 0.0f, 0.0f);
+    CollisionCount[mainParticleId] = 0;
+}

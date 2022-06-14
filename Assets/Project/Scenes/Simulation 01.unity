@@ -1874,7 +1874,7 @@ MonoBehaviour:
   radius: 0.5
   H: 2
   K: 1000
-  Mu: 5
+  Mu: 12.5
   Rho: 1
   Dampen: 0.3
   gridVolume: 70

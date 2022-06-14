@@ -3166,7 +3166,7 @@ MonoBehaviour:
   computeShader: {fileID: 7200000, guid: dfc0eb78a13164246923c98a18087f63, type: 3}
   gravity: {x: 0, y: -10, z: 0}
   generationVolume: {x: 90, y: 25, z: 70}
-  TimeStep: 0.01
+  TimeStep: 0.016
   Mass: 1
   radius: 0.5
   H: 2
@@ -3174,8 +3174,8 @@ MonoBehaviour:
   Mu: 20
   Rho: 1
   Dampen: 0.3
-  gridSize: 75
-  voxelSize: 2.5
+  gridVolume: 50
+  voxelVolume: 2
   drawGrid: 1
   drawGeneration: 1
   mesh: {fileID: 2540817853737639666, guid: 9ff7420896ea917498b75714cb2be527, type: 3}
@@ -3183,12 +3183,6 @@ MonoBehaviour:
   forceFieldsCount: 0
   explosionFieldsCount: 0
   planesCount: 0
-  _Mu: {fileID: 967812078}
-  _K: {fileID: 1633494755}
-  _Rho: {fileID: 282974922}
-  _Gx: {fileID: 615773481}
-  _Gy: {fileID: 1330716390}
-  _Gz: {fileID: 361657571}
 --- !u!4 &554020250
 Transform:
   m_ObjectHideFlags: 0

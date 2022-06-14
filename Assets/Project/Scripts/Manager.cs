@@ -13,7 +13,7 @@ public class Manager : MonoBehaviour
 	public Vector3 gravity = new Vector3(0.0f, -10.0f, 0.0f);
 	public Vector3Int generationVolume = new Vector3Int(32, 32, 32);
 
-	public float TimeStep = 0.01f;
+	public float TimeStep = 0.016f;
 	public float Mass = 1.0f;
 	public float radius = 0.5f;
 	public float H = 2.0f;

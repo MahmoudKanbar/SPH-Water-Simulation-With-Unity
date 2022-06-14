@@ -1869,7 +1869,7 @@ MonoBehaviour:
   computeShader: {fileID: 7200000, guid: dfc0eb78a13164246923c98a18087f63, type: 3}
   gravity: {x: 0, y: -10, z: 0}
   generationVolume: {x: 95, y: 25, z: 50}
-  TimeStep: 0.01
+  TimeStep: 0.016
   Mass: 1
   radius: 0.5
   H: 2

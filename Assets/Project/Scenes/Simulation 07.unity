@@ -1033,7 +1033,7 @@ MonoBehaviour:
   computeShader: {fileID: 7200000, guid: dfc0eb78a13164246923c98a18087f63, type: 3}
   gravity: {x: 0, y: -10, z: 0}
   generationVolume: {x: 50, y: 50, z: 20}
-  TimeStep: 0.004
+  TimeStep: 0.016
   Mass: 1
   radius: 0.5
   H: 2
@@ -1041,8 +1041,8 @@ MonoBehaviour:
   Mu: 5
   Rho: 1
   Dampen: 0.3
-  gridSize: 40
-  voxelSize: 2.5
+  gridVolume: 50
+  voxelVolume: 2
   drawGrid: 1
   drawGeneration: 1
   mesh: {fileID: 2540817853737639666, guid: 9ff7420896ea917498b75714cb2be527, type: 3}
